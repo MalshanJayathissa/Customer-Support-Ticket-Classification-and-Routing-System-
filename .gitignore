@@ -152,7 +152,7 @@ activemq-data/
 # Environments
 .env
 .envrc
-.venv
+.venv/
 env/
 venv/
 ENV/
@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ML / experiment artifacts
+mlruns/
+*.pkl
+*.joblib
+
+# Local model/cache files
+models/*
+!models/README.md
