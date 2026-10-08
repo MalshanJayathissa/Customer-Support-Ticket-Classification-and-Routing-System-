@@ -1,15 +1,28 @@
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+
+import Navbar from "./components/Navbar";
+
+import Home from "./pages/Home";
+import Predict from "./pages/Predict";
+import BatchPredict from "./pages/BatchPredict";
+import Dashboard from "./pages/Dashboard";
+import About from "./pages/About";
+
 import "./App.css";
 
 function App() {
   return (
-    <div className="app">
-      <h1>Customer Support Ticket Classification & Routing</h1>
+    <BrowserRouter>
+      <Navbar />
 
-      <p>
-        Intelligent customer support ticket classification and routing
-        system developed for TensorForge 2.0.
-      </p>
-    </div>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/predict" element={<Predict />} />
+        <Route path="/batch" element={<BatchPredict />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/about" element={<About />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
