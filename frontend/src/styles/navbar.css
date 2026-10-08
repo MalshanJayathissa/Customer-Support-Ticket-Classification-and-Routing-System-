@@ -51,3 +51,29 @@
 
   border-radius: 2px;
 }
+
+@media (max-width: 760px) {
+  .navbar {
+    height: auto;
+
+    padding: 18px 20px;
+
+    flex-direction: column;
+
+    gap: 16px;
+  }
+
+  .navbar-links {
+    width: 100%;
+
+    justify-content: center;
+
+    flex-wrap: wrap;
+
+    gap: 15px;
+  }
+
+  .navbar-links a {
+    font-size: 13px;
+  }
+}

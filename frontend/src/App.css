@@ -2,17 +2,19 @@
   min-height: 100vh;
 }
 
+.app-layout {
+  min-height: 100vh;
+
+  display: flex;
+  flex-direction: column;
+}
+
+.app-content {
+  flex: 1;
+}
+
 .page-container {
   max-width: 1100px;
   margin: 0 auto;
   padding: 60px 30px;
-}
-
-.page-container h1 {
-  color: #111827;
-  margin-bottom: 15px;
-}
-
-.page-container p {
-  color: #6b7280;
 }
