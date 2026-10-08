@@ -1,0 +1,246 @@
+.dashboard-page {
+  min-height: calc(100vh - 70px);
+  background: #f8fafc;
+  padding: 55px 30px;
+}
+
+.dashboard-container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.dashboard-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+
+  gap: 20px;
+
+  margin-bottom: 35px;
+}
+
+.dashboard-heading h1 {
+  color: #111827;
+  font-size: 36px;
+  margin-bottom: 10px;
+}
+
+.dashboard-heading > div > p:last-child {
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.demo-badge {
+  background: #fff7ed;
+  color: #c2410c;
+
+  border: 1px solid #fed7aa;
+
+  padding: 7px 12px;
+
+  border-radius: 20px;
+
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.stats-grid {
+  display: grid;
+
+  grid-template-columns: repeat(4, 1fr);
+
+  gap: 20px;
+
+  margin-bottom: 30px;
+}
+
+.stat-card {
+  background: white;
+
+  border: 1px solid #e5e7eb;
+
+  border-radius: 14px;
+
+  padding: 24px;
+}
+
+.stat-card span {
+  display: block;
+
+  color: #6b7280;
+
+  font-size: 13px;
+  font-weight: 600;
+
+  margin-bottom: 12px;
+}
+
+.stat-card strong {
+  display: block;
+
+  color: #111827;
+
+  font-size: 30px;
+
+  margin-bottom: 8px;
+}
+
+.stat-card p {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.dashboard-charts {
+  display: grid;
+
+  grid-template-columns: 1.25fr 0.75fr;
+
+  gap: 25px;
+
+  margin-bottom: 30px;
+}
+
+.chart-card,
+.team-chart-card,
+.recent-card {
+  background: white;
+
+  border: 1px solid #e5e7eb;
+
+  border-radius: 14px;
+
+  padding: 25px;
+}
+
+.chart-header {
+  margin-bottom: 25px;
+}
+
+.chart-header h2,
+.recent-header h2 {
+  color: #111827;
+
+  font-size: 18px;
+
+  margin-bottom: 7px;
+}
+
+.chart-header p,
+.recent-header p {
+  color: #6b7280;
+
+  font-size: 13px;
+}
+
+.chart-area {
+  height: 320px;
+}
+
+.team-chart-card {
+  margin-bottom: 30px;
+}
+
+.team-chart-area {
+  height: 340px;
+}
+
+.recent-card {
+  margin-bottom: 40px;
+}
+
+.recent-header {
+  margin-bottom: 20px;
+}
+
+.dashboard-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.dashboard-table {
+  width: 100%;
+
+  border-collapse: collapse;
+
+  font-size: 14px;
+}
+
+.dashboard-table th {
+  background: #f8fafc;
+
+  color: #374151;
+
+  padding: 13px 15px;
+
+  text-align: left;
+
+  border-bottom: 1px solid #e5e7eb;
+
+  white-space: nowrap;
+}
+
+.dashboard-table td {
+  padding: 15px;
+
+  color: #4b5563;
+
+  border-bottom: 1px solid #e5e7eb;
+
+  white-space: nowrap;
+}
+
+.dashboard-table tbody tr:hover {
+  background: #f9fafb;
+}
+
+.ticket-id {
+  color: #2563eb !important;
+  font-weight: 600;
+}
+
+.dashboard-category {
+  display: inline-block;
+
+  background: #eff6ff;
+  color: #1d4ed8;
+
+  padding: 5px 9px;
+
+  border-radius: 20px;
+
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.confidence-value {
+  font-weight: 700;
+  color: #047857;
+}
+
+@media (max-width: 1000px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .dashboard-page {
+    padding: 35px 18px;
+  }
+
+  .dashboard-heading {
+    flex-direction: column;
+  }
+
+  .dashboard-heading h1 {
+    font-size: 30px;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
