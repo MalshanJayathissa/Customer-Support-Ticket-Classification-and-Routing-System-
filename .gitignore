@@ -152,7 +152,7 @@ activemq-data/
 # Environments
 .env
 .envrc
-.venv
+.venv/
 env/
 venv/
 ENV/
@@ -219,12 +219,23 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Node
-frontend/node_modules/
+# ML / experiment artifacts
+mlruns/
+*.pkl
+*.joblib
 
-# IDE
-.vscode/
+# Local model/cache files
+models/*
+!models/README.md
 
-# OS
-.DS_Store
-Thumbs.db
+
+# ML model artifacts
+models/*
+!models/README.md
+
+# Model handoff files and archives
+model_handoff/
+model_handoff.zip
+
+# Scikit-learn serialized models
+*.joblib
