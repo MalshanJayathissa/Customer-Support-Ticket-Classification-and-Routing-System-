@@ -228,6 +228,14 @@ mlruns/
 models/*
 !models/README.md
 
+frontend/node_modules/
+
+# IDE
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
 
 # ML model artifacts
 models/*
@@ -239,3 +247,4 @@ model_handoff.zip
 
 # Scikit-learn serialized models
 *.joblib
+
