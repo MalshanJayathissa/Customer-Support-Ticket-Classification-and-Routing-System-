@@ -227,3 +227,15 @@ mlruns/
 # Local model/cache files
 models/*
 !models/README.md
+
+
+# ML model artifacts
+models/*
+!models/README.md
+
+# Model handoff files and archives
+model_handoff/
+model_handoff.zip
+
+# Scikit-learn serialized models
+*.joblib
