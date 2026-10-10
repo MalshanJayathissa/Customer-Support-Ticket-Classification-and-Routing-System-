@@ -231,7 +231,6 @@ mlruns/
 *.joblib
 
 # Local model/cache files
-models/*
 !models/README.md
 
 frontend/node_modules/

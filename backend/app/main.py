@@ -2,6 +2,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.openapi.utils import get_openapi
 
 from app.auth import verify_api_key_headers
 
@@ -699,3 +700,99 @@ def delete_batch_job(
     return Response(
         status_code=204
     )
+
+
+# ============================================================
+# OpenAPI / Swagger Authentication Configuration
+# ============================================================
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    # --------------------------------------------------------
+    # Declare the supported authentication mechanisms
+    # --------------------------------------------------------
+
+    openapi_schema.setdefault(
+        "components", {}
+    ).setdefault(
+        "securitySchemes", {}
+    )
+
+    openapi_schema["components"]["securitySchemes"].update({
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": (
+                "API key provided through the X-API-Key header."
+            ),
+        },
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "description": (
+                "API key provided as Authorization: Bearer <key>."
+            ),
+        },
+    })
+
+    # --------------------------------------------------------
+    # Add authentication to every protected endpoint
+    # --------------------------------------------------------
+
+    protected_paths = {
+        "/predict",
+        "/predict/batch",
+        "/batch/jobs",
+        "/batch/jobs/{job_id}",
+        "/batch/jobs/{job_id}/results",
+    }
+
+    for path, path_item in openapi_schema["paths"].items():
+
+        if path not in protected_paths:
+            continue
+
+        for method, operation in path_item.items():
+
+            if method.lower() not in {
+                "get",
+                "post",
+                "put",
+                "patch",
+                "delete",
+            }:
+                continue
+
+            # Either authentication method is accepted.
+            operation["security"] = [
+                {"ApiKeyAuth": []},
+                {"BearerAuth": []},
+            ]
+
+    # --------------------------------------------------------
+    # Health endpoint remains public
+    # --------------------------------------------------------
+
+    if "/health" in openapi_schema["paths"]:
+        health_operation = (
+            openapi_schema["paths"]["/health"].get("get")
+        )
+
+        if health_operation is not None:
+            health_operation["security"] = []
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
