@@ -1,0 +1,16 @@
+﻿{
+  "tickets": [
+    {
+      "ticket_id": "DUP-001",
+      "channel": "email",
+      "subject": "Refund",
+      "text": "I need a refund."
+    },
+    {
+      "ticket_id": "DUP-001",
+      "channel": "chat",
+      "subject": "Refund again",
+      "text": "Please refund this order."
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+﻿{
+  "ticket_id": "AUTH-001",
+  "channel": "email",
+  "subject": "Refund",
+  "text": "I need a refund for my order."
+}
