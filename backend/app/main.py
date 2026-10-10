@@ -1,16 +1,16 @@
+
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth import verify_api_key_headers
-
 from app.schemas.requests import (
     BatchJobRequest,
     BatchRequest,
     PredictRequest,
 )
-
 from app.schemas.responses import (
     BatchJobResultsResponse,
     BatchJobStatusResponse,
@@ -18,10 +18,9 @@ from app.schemas.responses import (
     HealthResponse,
     PredictResponse,
 )
-
 from app.services.inference import InferenceService
 from app.services.job_manager import job_manager
-from app.services.job_worker import job_worker
+from app.services.job_worker import JobWorker
 
 
 app = FastAPI(
@@ -37,21 +36,67 @@ app = FastAPI(
 SYNC_BATCH_MAX_BYTES = 5 * 1024 * 1024
 ASYNC_BATCH_MAX_BYTES = 25 * 1024 * 1024
 
-PROTECTED_PREFIXES = (
-    "/predict",
-    "/batch/jobs",
-)
+
+# ============================================================
+# Swagger authentication configuration
+# ============================================================
+
+def custom_openapi():
+    # Reuse the generated schema after the first request.
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    # Register the API key as an HTTP header in Swagger.
+    schema.setdefault("components", {}).setdefault(
+        "securitySchemes", {}
+    )["APIKeyHeader"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Enter the API key configured in your backend .env file.",
+    }
+
+    # Require authentication only for protected endpoints.
+    protected_operations = {
+        ("/predict", "post"),
+        ("/predict/batch", "post"),
+        ("/batch/jobs", "post"),
+        ("/batch/jobs/{job_id}", "get"),
+        ("/batch/jobs/{job_id}", "delete"),
+        ("/batch/jobs/{job_id}/results", "get"),
+    }
+
+    for path, method in protected_operations:
+        operation = schema.get("paths", {}).get(path, {}).get(method)
+
+        if operation is not None:
+            operation["security"] = [{"APIKeyHeader": []}]
+
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 # ============================================================
 # Services
 # ============================================================
 
+# Load one model instance and share it with the background worker.
 inference_service = InferenceService()
+job_worker = JobWorker(inference_service)
 
 
 # ============================================================
-# Helper: JSON error response
+# JSON error response
 # ============================================================
 
 def error_response(
@@ -93,27 +138,20 @@ def error_response(
 
 
 # ============================================================
-# Helper: protected routes
+# Protected routes
 # ============================================================
 
 def is_protected_path(path: str) -> bool:
-    if path == "/predict":
-        return True
-
-    if path == "/predict/batch":
-        return True
-
-    if path == "/batch/jobs":
-        return True
-
-    if path.startswith("/batch/jobs/"):
-        return True
-
-    return False
+    return (
+        path == "/predict"
+        or path == "/predict/batch"
+        or path == "/batch/jobs"
+        or path.startswith("/batch/jobs/")
+    )
 
 
 # ============================================================
-# Helper: content length
+# Request content length
 # ============================================================
 
 def get_content_length(request: Request) -> int:
@@ -129,7 +167,7 @@ def get_content_length(request: Request) -> int:
 
 
 # ============================================================
-# Authentication + validation-order middleware
+# Authentication, content type, and request size
 # ============================================================
 
 @app.middleware("http")
@@ -137,66 +175,55 @@ async def api_middleware(request: Request, call_next):
     path = request.url.path
 
     if is_protected_path(path):
-
-        # ----------------------------------------------------
-        # 1. Authentication
-        # MUST happen before body parsing / validation
-        # ----------------------------------------------------
+        # Validate the API key before processing protected requests.
         if not verify_api_key_headers(request.headers):
             return error_response(
                 401,
                 "UNAUTHORIZED",
                 "Missing or invalid API key.",
-                headers={
-                    "WWW-Authenticate": "Bearer",
-                },
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # ----------------------------------------------------
-        # 2. Content-Type
-        # ----------------------------------------------------
+        # Require JSON for requests that submit a body.
         if request.method in {"POST", "PUT", "PATCH"}:
-            content_type = request.headers.get(
-                "content-type",
-                "",
-            )
+            content_type = request.headers.get("content-type", "")
 
-            if not content_type.lower().startswith(
-                "application/json"
-            ):
+            if not content_type.lower().startswith("application/json"):
                 return error_response(
                     415,
                     "UNSUPPORTED_MEDIA_TYPE",
                     "Content-Type must be application/json.",
                 )
 
-        # ----------------------------------------------------
-        # 3. Request size
-        # ----------------------------------------------------
+        # Enforce request-size limits using Content-Length.
         if request.method == "POST":
             content_length = get_content_length(request)
 
-            if path == "/predict/batch":
-                if content_length > SYNC_BATCH_MAX_BYTES:
-                    return error_response(
-                        413,
-                        "PAYLOAD_TOO_LARGE",
-                        "Request body exceeds the 5 MB limit.",
-                    )
+            if (
+                path == "/predict/batch"
+                and content_length > SYNC_BATCH_MAX_BYTES
+            ):
+                return error_response(
+                    413,
+                    "PAYLOAD_TOO_LARGE",
+                    "Request body exceeds the 5 MB limit.",
+                )
 
-            elif path == "/batch/jobs":
-                if content_length > ASYNC_BATCH_MAX_BYTES:
-                    return error_response(
-                        413,
-                        "PAYLOAD_TOO_LARGE",
-                        "Request body exceeds the 25 MB limit.",
-                    )
+            if (
+                path == "/batch/jobs"
+                and content_length > ASYNC_BATCH_MAX_BYTES
+            ):
+                return error_response(
+                    413,
+                    "PAYLOAD_TOO_LARGE",
+                    "Request body exceeds the 25 MB limit.",
+                )
 
     return await call_next(request)
 
 
 # ============================================================
-# Pydantic validation errors
+# Request validation errors
 # ============================================================
 
 @app.exception_handler(RequestValidationError)
@@ -206,9 +233,7 @@ async def request_validation_exception_handler(
 ):
     errors = exc.errors()
 
-    # --------------------------------------------------------
-    # Invalid JSON -> 400
-    # --------------------------------------------------------
+    # Return HTTP 400 for malformed JSON.
     for error in errors:
         if error.get("type") == "json_invalid":
             return error_response(
@@ -218,16 +243,13 @@ async def request_validation_exception_handler(
                 issue="Request body contains invalid JSON.",
             )
 
-    # --------------------------------------------------------
-    # Validation error -> 422
-    # --------------------------------------------------------
+    # Return HTTP 422 for other validation failures.
     index = None
     field = None
     issue = "Request validation failed."
 
     if errors:
         first_error = errors[0]
-
         location = first_error.get("loc", ())
         message = first_error.get("msg")
 
@@ -257,7 +279,7 @@ async def request_validation_exception_handler(
 
 
 # ============================================================
-# FastAPI HTTPException handler
+# HTTP exception handler
 # ============================================================
 
 @app.exception_handler(HTTPException)
@@ -265,8 +287,6 @@ async def http_exception_handler(
     request: Request,
     exc: HTTPException,
 ):
-    status = exc.status_code
-
     code_map = {
         400: "BAD_REQUEST",
         401: "UNAUTHORIZED",
@@ -279,26 +299,16 @@ async def http_exception_handler(
         429: "TOO_MANY_REQUESTS",
     }
 
-    code = code_map.get(
-        status,
-        "HTTP_ERROR",
-    )
-
-    headers = {}
-
-    if exc.headers:
-        headers.update(exc.headers)
-
     return error_response(
-        status,
-        code,
+        exc.status_code,
+        code_map.get(exc.status_code, "HTTP_ERROR"),
         str(exc.detail),
-        headers=headers or None,
+        headers=exc.headers,
     )
 
 
 # ============================================================
-# Unknown routes + unsupported methods
+# Unknown routes and unsupported methods
 # ============================================================
 
 @app.exception_handler(StarletteHTTPException)
@@ -306,9 +316,6 @@ async def starlette_http_exception_handler(
     request: Request,
     exc: StarletteHTTPException,
 ):
-    # --------------------------------------------------------
-    # Unknown route
-    # --------------------------------------------------------
     if exc.status_code == 404:
         return error_response(
             404,
@@ -316,16 +323,11 @@ async def starlette_http_exception_handler(
             "Route not found.",
         )
 
-    # --------------------------------------------------------
-    # Unsupported HTTP method
-    # --------------------------------------------------------
     if exc.status_code == 405:
         headers = None
 
         if exc.headers and "Allow" in exc.headers:
-            headers = {
-                "Allow": exc.headers["Allow"],
-            }
+            headers = {"Allow": exc.headers["Allow"]}
 
         return error_response(
             405,
@@ -346,10 +348,7 @@ async def starlette_http_exception_handler(
 # Health
 # ============================================================
 
-@app.get(
-    "/health",
-    response_model=HealthResponse,
-)
+@app.get("/health", response_model=HealthResponse)
 def health():
     return HealthResponse(
         status="ok",
@@ -362,43 +361,27 @@ def health():
 # Single prediction
 # ============================================================
 
-@app.post(
-    "/predict",
-    response_model=PredictResponse,
-)
+@app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
-    result = inference_service.predict_one(
-        request
-    )
-
-    return result
+    return inference_service.predict_one(request)
 
 
 # ============================================================
 # Synchronous batch prediction
 # ============================================================
 
-@app.post(
-    "/predict/batch",
-    response_model=BatchResponse,
-)
-def predict_batch(
-    request: BatchRequest,
-):
-    predictions = inference_service.predict_batch(
-        request.tickets
-    )
+@app.post("/predict/batch", response_model=BatchResponse)
+def predict_batch(request: BatchRequest):
+    predictions = inference_service.predict_batch(request.tickets)
 
     return BatchResponse(
         predictions=predictions,
-        meta={
-            "count": len(predictions),
-        },
+        meta={"count": len(predictions)},
     )
 
 
 # ============================================================
-# Async batch job creation
+# Create asynchronous batch job
 # ============================================================
 
 @app.post(
@@ -414,23 +397,16 @@ def create_batch_job(
         alias="Idempotency-Key",
     ),
 ):
-    # --------------------------------------------------------
-    # Idempotency
-    # --------------------------------------------------------
+    # Return the existing job when the idempotency key is reused.
     if idempotency_key:
-        existing_job = (
-            job_manager.get_job_by_idempotency_key(
-                idempotency_key
-            )
+        existing_job = job_manager.get_job_by_idempotency_key(
+            idempotency_key
         )
 
         if existing_job is not None:
-            response.status_code = 202
-
             response.headers["Location"] = (
                 f"/batch/jobs/{existing_job['job_id']}"
             )
-
             response.headers["Retry-After"] = "2"
 
             return BatchJobStatusResponse(
@@ -445,45 +421,34 @@ def create_batch_job(
                 error=existing_job["error"],
             )
 
-    # --------------------------------------------------------
-    # Capacity
-    # Maximum:
-    # 1 running + 3 queued = 4 active jobs
-    # --------------------------------------------------------
-    active_count = job_manager.count_active_jobs()
-
-    if active_count >= 4:
+    # Enforce the active-job capacity limit.
+    if job_manager.count_active_jobs() >= job_manager.MAX_ACTIVE_JOBS:
         return error_response(
             429,
             "TOO_MANY_REQUESTS",
             "Batch job capacity is currently full.",
-            headers={
-                "Retry-After": "5",
-            },
+            headers={"Retry-After": "5"},
         )
 
-    # --------------------------------------------------------
-    # Create job
-    # --------------------------------------------------------
+    # Create a new queued job.
     job = job_manager.create_job(
         tickets=request.tickets,
         idempotency_key=idempotency_key,
     )
 
-    response.status_code = 202
-
-    response.headers["Location"] = (
-        f"/batch/jobs/{job['job_id']}"
+    # Store the model version before processing starts.
+    job_manager.update_job(
+        job["job_id"],
+        model_version=inference_service.model_version,
     )
 
+    job = job_manager.get_job(job["job_id"])
+
+    response.headers["Location"] = f"/batch/jobs/{job['job_id']}"
     response.headers["Retry-After"] = "2"
 
-    # --------------------------------------------------------
-    # Start background worker
-    # --------------------------------------------------------
-    job_worker.submit(
-        job["job_id"]
-    )
+    # Start background processing.
+    job_worker.submit(job["job_id"])
 
     return BatchJobStatusResponse(
         job_id=job["job_id"],
@@ -506,19 +471,11 @@ def create_batch_job(
     "/batch/jobs/{job_id}",
     response_model=BatchJobStatusResponse,
 )
-def get_batch_job_status(
-    job_id: str,
-    response: Response,
-):
-    job = job_manager.get_job(
-        job_id
-    )
+def get_batch_job_status(job_id: str, response: Response):
+    job = job_manager.get_job(job_id)
 
     if job is None:
-
-        if job_manager.is_expired(
-            job_id
-        ):
+        if job_manager.is_expired(job_id):
             raise HTTPException(
                 status_code=410,
                 detail="Batch job has expired.",
@@ -529,13 +486,7 @@ def get_batch_job_status(
             detail="Batch job not found.",
         )
 
-    # --------------------------------------------------------
-    # Retry-After while queued/running
-    # --------------------------------------------------------
-    if job["status"] in {
-        "queued",
-        "running",
-    }:
+    if job["status"] in {"queued", "running"}:
         response.headers["Retry-After"] = "2"
 
     return BatchJobStatusResponse(
@@ -564,9 +515,6 @@ def get_batch_job_results(
     offset: int = 0,
     limit: int = 100,
 ):
-    # --------------------------------------------------------
-    # Pagination validation
-    # --------------------------------------------------------
     if offset < 0:
         raise HTTPException(
             status_code=422,
@@ -579,18 +527,10 @@ def get_batch_job_results(
             detail="limit must be between 1 and 100.",
         )
 
-    # --------------------------------------------------------
-    # Find job
-    # --------------------------------------------------------
-    job = job_manager.get_job(
-        job_id
-    )
+    job = job_manager.get_job(job_id)
 
     if job is None:
-
-        if job_manager.is_expired(
-            job_id
-        ):
+        if job_manager.is_expired(job_id):
             raise HTTPException(
                 status_code=410,
                 detail="Batch job has expired.",
@@ -601,34 +541,21 @@ def get_batch_job_results(
             detail="Batch job not found.",
         )
 
-    # --------------------------------------------------------
-    # Results only available after success
-    # --------------------------------------------------------
+    # Return HTTP 409 until the job completes successfully.
     if job["status"] != "succeeded":
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Batch job has not completed "
-                "successfully."
-            ),
+            detail="Batch job has not completed successfully.",
         )
 
-    predictions = (
-        job.get("predictions")
-        or []
+    predictions = job.get("predictions") or []
+    page = predictions[offset:offset + limit]
+
+    next_offset = (
+        offset + limit
+        if offset + limit < len(predictions)
+        else None
     )
-
-    # --------------------------------------------------------
-    # Pagination
-    # --------------------------------------------------------
-    page = predictions[
-        offset : offset + limit
-    ]
-
-    next_offset = None
-
-    if offset + limit < len(predictions):
-        next_offset = offset + limit
 
     return BatchJobResultsResponse(
         job_id=job["job_id"],
@@ -642,25 +569,15 @@ def get_batch_job_results(
 
 
 # ============================================================
-# Delete / cancel batch job
+# Delete or cancel batch job
 # ============================================================
 
-@app.delete(
-    "/batch/jobs/{job_id}",
-    status_code=204,
-)
-def delete_batch_job(
-    job_id: str,
-):
-    job = job_manager.get_job(
-        job_id
-    )
+@app.delete("/batch/jobs/{job_id}", status_code=204)
+def delete_batch_job(job_id: str):
+    job = job_manager.get_job(job_id)
 
     if job is None:
-
-        if job_manager.is_expired(
-            job_id
-        ):
+        if job_manager.is_expired(job_id):
             raise HTTPException(
                 status_code=410,
                 detail="Batch job has expired.",
@@ -671,31 +588,15 @@ def delete_batch_job(
             detail="Batch job not found.",
         )
 
-    # --------------------------------------------------------
-    # Queued / running -> cancel
-    # --------------------------------------------------------
-    if job["status"] in {
-        "queued",
-        "running",
-    }:
+    if job["status"] in {"queued", "running"}:
         job_manager.update_job(
             job_id,
             status="cancelled",
             completed_at=job_manager._now(),
             error="Job cancelled by client.",
         )
+        return Response(status_code=204)
 
-        return Response(
-            status_code=204
-        )
-
-    # --------------------------------------------------------
-    # Finished -> discard
-    # --------------------------------------------------------
-    job_manager.delete_job(
-        job_id
-    )
-
-    return Response(
-        status_code=204
-    )
+    # Delete a completed or failed job.
+    job_manager.delete_job(job_id)
+    return Response(status_code=204)

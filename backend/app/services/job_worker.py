@@ -1,25 +1,20 @@
+
 import threading
 
-from app.services.inference import InferenceService
 from app.services.job_manager import job_manager
 
 
 class JobWorker:
-    def __init__(self):
-        self.inference_service = InferenceService()
+    def __init__(self, inference_service):
+        # Share the model instance created in main.py.
+        self.inference_service = inference_service
 
-        # Only one async batch job runs at a time.
+        # Protect worker state and prevent simultaneous jobs.
         self.lock = threading.Lock()
         self.running = False
 
-    # ========================================================
-    # Process one job
-    # ========================================================
-
     def process_job(self, job_id):
-        # ----------------------------------------------------
-        # Make sure only one worker job runs at a time
-        # ----------------------------------------------------
+        # Claim the worker before processing.
         with self.lock:
             if self.running:
                 return
@@ -29,25 +24,17 @@ class JobWorker:
         try:
             job = job_manager.get_job(job_id)
 
-            if job is None:
+            if job is None or job["status"] != "queued":
                 return
 
-            # Job may have been cancelled while queued.
-            if job["status"] != "queued":
-                return
-
-            # ------------------------------------------------
-            # Mark running
-            # ------------------------------------------------
+            # Record the start time and model version.
             job_manager.update_job(
                 job_id,
                 status="running",
                 started_at=job_manager._now(),
+                model_version=self.inference_service.model_version,
             )
 
-            # ------------------------------------------------
-            # Run inference
-            # ------------------------------------------------
             results = self.inference_service.predict_batch(
                 job["tickets"]
             )
@@ -55,9 +42,6 @@ class JobWorker:
             predictions = []
 
             for result in results:
-                # --------------------------------------------
-                # Check cancellation during processing
-                # --------------------------------------------
                 current_job = job_manager.get_job(job_id)
 
                 if current_job is None:
@@ -68,15 +52,14 @@ class JobWorker:
 
                 predictions.append(result)
 
+                # Persist predictions and update progress.
                 job_manager.update_job(
                     job_id,
                     processed=len(predictions),
                     predictions=predictions,
                 )
 
-            # ------------------------------------------------
-            # Final cancellation check
-            # ------------------------------------------------
+            # Do not overwrite cancellation with success.
             current_job = job_manager.get_job(job_id)
 
             if current_job is None:
@@ -85,47 +68,36 @@ class JobWorker:
             if current_job["status"] == "cancelled":
                 return
 
-            # ------------------------------------------------
-            # Mark succeeded
-            # ------------------------------------------------
             job_manager.update_job(
                 job_id,
                 status="succeeded",
                 processed=len(predictions),
                 predictions=predictions,
+                model_version=self.inference_service.model_version,
                 completed_at=job_manager._now(),
+                error=None,
             )
 
         except Exception as exc:
-            # -----------------------------------------------
-            # Do not overwrite a cancelled job with failed.
-            # -----------------------------------------------
             current_job = job_manager.get_job(job_id)
 
-            if current_job is not None:
-                if current_job["status"] != "cancelled":
-                    job_manager.update_job(
-                        job_id,
-                        status="failed",
-                        completed_at=job_manager._now(),
-                        error=str(exc),
-                    )
+            if (
+                current_job is not None
+                and current_job["status"] != "cancelled"
+            ):
+                job_manager.update_job(
+                    job_id,
+                    status="failed",
+                    completed_at=job_manager._now(),
+                    error=str(exc),
+                )
 
         finally:
-            # ------------------------------------------------
-            # Release worker
-            # ------------------------------------------------
+            # Release the worker and start the next queued job.
             with self.lock:
                 self.running = False
 
-            # ------------------------------------------------
-            # Start next queued job
-            # ------------------------------------------------
             self._start_next_queued_job()
-
-    # ========================================================
-    # Submit job
-    # ========================================================
 
     def submit(self, job_id):
         thread = threading.Thread(
@@ -133,12 +105,7 @@ class JobWorker:
             args=(job_id,),
             daemon=True,
         )
-
         thread.start()
-
-    # ========================================================
-    # Start next queued job
-    # ========================================================
 
     def _start_next_queued_job(self):
         with self.lock:
@@ -149,10 +116,6 @@ class JobWorker:
 
         if next_job is not None:
             self.submit(next_job["job_id"])
-
-    # ========================================================
-    # Find oldest queued job
-    # ========================================================
 
     def _find_next_queued_job(self):
         with job_manager.lock:
@@ -169,9 +132,4 @@ class JobWorker:
         if row is None:
             return None
 
-        return {
-            "job_id": row[0],
-        }
-
-
-job_worker = JobWorker()
+        return {"job_id": row["job_id"]}
