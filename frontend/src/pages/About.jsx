@@ -1,10 +1,71 @@
+
+import { useEffect, useState } from "react";
 import "../styles/about.css";
 
 function About() {
+  const [health, setHealth] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  // ============================================
+  // Fetch Real Backend Health Status
+  // ============================================
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const checkBackend = async () => {
+      try {
+        const response = await fetch("/api/health", {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Backend health check failed: ${response.status}`
+          );
+        }
+
+        const data = await response.json();
+
+        if (!controller.signal.aborted) {
+          setHealth(data);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error("Backend health error:", error);
+          setHealth(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setChecking(false);
+        }
+      }
+    };
+
+    checkBackend();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  // ============================================
+  // System Status
+  // ============================================
+
+  const backendReady = health?.status === "ok";
+
+  const modelReady =
+    backendReady && health?.model_loaded === true;
+
+  const modelVersion =
+    health?.model_version || "Unavailable";
+
   return (
     <main className="about-page">
-
       <div className="about-container">
+
+        {/* Page Heading */}
 
         <section className="about-heading">
           <p className="page-tag">
@@ -16,39 +77,70 @@ function About() {
           </h1>
 
           <p>
-            An end-to-end machine learning system developed for
-            TensorForge 2.0 Phase 2 to classify customer support
-            tickets and route them to the appropriate support team.
+            An end-to-end machine learning system developed
+            for TensorForge 2.0 Phase 2 to classify customer
+            support tickets, predict urgency, and route
+            requests to the appropriate support team.
           </p>
         </section>
+
+        {/* ============================================
+            System Status Cards
+        ============================================ */}
 
         <section className="system-status">
 
           <div className="status-card">
             <span>Frontend</span>
-            <strong>React</strong>
+
+            <strong>React + Vite</strong>
+
             <div className="status-indicator ready">
-              Ready
+              Running
             </div>
           </div>
 
           <div className="status-card">
             <span>Backend API</span>
+
             <strong>FastAPI</strong>
-            <div className="status-indicator pending">
-              In Development
+
+            <div
+              className={`status-indicator ${
+                backendReady ? "ready" : "pending"
+              }`}
+            >
+              {checking
+                ? "Checking..."
+                : backendReady
+                ? "Connected"
+                : "Unavailable"}
             </div>
           </div>
 
           <div className="status-card">
             <span>ML Model</span>
-            <strong>Pending</strong>
-            <div className="status-indicator pending">
-              In Development
+
+            <strong>XLM-RoBERTa</strong>
+
+            <div
+              className={`status-indicator ${
+                modelReady ? "ready" : "pending"
+              }`}
+            >
+              {checking
+                ? "Checking..."
+                : modelReady
+                ? "Model Loaded"
+                : "Not Verified"}
             </div>
           </div>
 
         </section>
+
+        {/* ============================================
+            Architecture and Model Information
+        ============================================ */}
 
         <section className="about-grid">
 
@@ -63,61 +155,64 @@ function About() {
 
                 <div>
                   <strong>React Frontend</strong>
+
                   <p>
-                    Users submit individual tickets or batch files.
+                    Users submit individual customer support
+                    tickets or upload CSV datasets.
                   </p>
                 </div>
               </div>
 
-              <div className="architecture-arrow">
-                ↓
-              </div>
+              <div className="architecture-arrow">↓</div>
 
               <div className="architecture-item">
                 <span>2</span>
 
                 <div>
-                  <strong>Backend API</strong>
+                  <strong>FastAPI Backend</strong>
+
                   <p>
-                    Validates requests and handles prediction services.
+                    Authenticates requests, validates ticket
+                    data, and manages prediction jobs.
                   </p>
                 </div>
               </div>
 
-              <div className="architecture-arrow">
-                ↓
-              </div>
+              <div className="architecture-arrow">↓</div>
 
               <div className="architecture-item">
                 <span>3</span>
 
                 <div>
-                  <strong>ML Classification Model</strong>
+                  <strong>ML Inference Pipeline</strong>
+
                   <p>
-                    Predicts the appropriate ticket category.
+                    XLM-RoBERTa performs primary classification.
+                    Additional classifiers handle secondary
+                    categories and urgency.
                   </p>
                 </div>
               </div>
 
-              <div className="architecture-arrow">
-                ↓
-              </div>
+              <div className="architecture-arrow">↓</div>
 
               <div className="architecture-item">
                 <span>4</span>
 
                 <div>
-                  <strong>Ticket Routing</strong>
+                  <strong>Automatic Ticket Routing</strong>
+
                   <p>
-                    Maps the predicted category to the required
-                    support team.
+                    Assigns each ticket to the appropriate
+                    support team based on its predicted category.
                   </p>
                 </div>
               </div>
 
             </div>
-
           </div>
+
+          {/* Model Information */}
 
           <div className="about-card">
 
@@ -126,35 +221,63 @@ function About() {
             <div className="info-list">
 
               <div className="info-row">
-                <span>Model</span>
-                <strong>Pending final selection</strong>
+                <span>Primary Model</span>
+                <strong>XLM-RoBERTa</strong>
+              </div>
+
+              <div className="info-row">
+                <span>Model Version</span>
+                <strong>{modelVersion}</strong>
+              </div>
+
+              <div className="info-row">
+                <span>Primary Categories</span>
+                <strong>11</strong>
+              </div>
+
+              <div className="info-row">
+                <span>Secondary Classifiers</span>
+                <strong>Included</strong>
+              </div>
+
+              <div className="info-row">
+                <span>Urgency Classifier</span>
+                <strong>Included</strong>
               </div>
 
               <div className="info-row">
                 <span>Validation Score</span>
-                <strong>Pending</strong>
+                <strong>Not yet published</strong>
               </div>
 
               <div className="info-row">
-                <span>Categories</span>
-                <strong>Pending</strong>
-              </div>
+                <span>Backend Health</span>
 
-              <div className="info-row">
-                <span>Training Status</span>
-                <strong>In Development</strong>
+                <strong>
+                  {checking
+                    ? "Checking..."
+                    : backendReady
+                    ? "Healthy"
+                    : "Not Connected"}
+                </strong>
               </div>
 
             </div>
 
             <div className="information-note">
-              Final model information will be updated after model
-              training and validation are completed.
+              Model status and version are retrieved from
+              the live FastAPI health endpoint. Model
+              validation metrics will be included once
+              verified by the ML development team.
             </div>
 
           </div>
 
         </section>
+
+        {/* ============================================
+            System Capabilities
+        ============================================ */}
 
         <section className="capabilities-card">
 
@@ -162,7 +285,7 @@ function About() {
             <h2>System Capabilities</h2>
 
             <p>
-              Main capabilities included in the Phase 2 MVP.
+              Main features implemented for TensorForge 2.0.
             </p>
           </div>
 
@@ -172,7 +295,8 @@ function About() {
               <strong>Single Prediction</strong>
 
               <p>
-                Classify individual customer support tickets.
+                Classify individual support tickets and
+                return predicted categories and confidence.
               </p>
             </div>
 
@@ -180,7 +304,8 @@ function About() {
               <strong>Automatic Routing</strong>
 
               <p>
-                Route tickets based on their predicted category.
+                Assign tickets to appropriate support teams
+                using the predicted classification.
               </p>
             </div>
 
@@ -188,8 +313,8 @@ function About() {
               <strong>Batch Processing</strong>
 
               <p>
-                Process multiple support tickets using batch
-                prediction.
+                Process synchronous batches and asynchronous
+                jobs containing up to 5,000 tickets.
               </p>
             </div>
 
@@ -197,7 +322,9 @@ function About() {
               <strong>Analytics Dashboard</strong>
 
               <p>
-                Visualize classification and routing activity.
+                Visualize classification and routing statistics
+                from completed predictions in the current
+                browser session.
               </p>
             </div>
 
@@ -206,7 +333,6 @@ function About() {
         </section>
 
       </div>
-
     </main>
   );
 }
