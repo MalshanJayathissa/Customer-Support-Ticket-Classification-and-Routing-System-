@@ -48,6 +48,11 @@ class BatchResponse(BaseModel):
     meta: dict[str, Any] | None = None
 
 
+class JobError(BaseModel):
+    code: str
+    message: str
+
+
 class BatchJobStatusResponse(BaseModel):
     job_id: str
     status: Literal[
@@ -61,9 +66,10 @@ class BatchJobStatusResponse(BaseModel):
     processed: int
     created_at: str
     started_at: str | None = None
-    completed_at: str | None = None
-    model_version: str | None = None
-    error: str | None = None
+    finished_at: str | None = None
+    expires_at: str | None = None
+    model_version: str
+    error: JobError | None = None
 
 
 class BatchJobResultsResponse(BaseModel):
@@ -73,10 +79,11 @@ class BatchJobResultsResponse(BaseModel):
     offset: int
     limit: int
     next_offset: int | None
+    model_version: str
     predictions: list[PredictResponse]
 
 
-class ErrorDetails(BaseModel):
+class ErrorDetail(BaseModel):
     index: int | None = None
     field: str | None = None
     issue: str | None = None
@@ -85,7 +92,7 @@ class ErrorDetails(BaseModel):
 class ErrorBody(BaseModel):
     code: str
     message: str
-    details: ErrorDetails | None = None
+    details: list[ErrorDetail] | None = None
 
 
 class ErrorResponse(BaseModel):

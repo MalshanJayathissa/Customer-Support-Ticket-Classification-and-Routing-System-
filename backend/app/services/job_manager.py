@@ -288,6 +288,10 @@ class JobManager:
 
     def mark_running_jobs_interrupted(self):
         now = self._now()
+        error_json = json.dumps({
+            "code": "interrupted",
+            "message": "Job interrupted by server restart.",
+        })
 
         with self.lock:
             with self.connection:
@@ -299,13 +303,46 @@ class JobManager:
                         error = ?
                     WHERE status = 'running'
                     """,
-                    (
-                        now,
-                        "Job interrupted by server restart.",
-                    ),
+                    (now, error_json),
                 )
 
     def _row_to_job(self, row):
+        # Convert stored errors into the API's {code, message} structure.
+        raw_error = row["error"]
+        error = None
+
+        if raw_error:
+            try:
+                parsed_error = json.loads(raw_error)
+                if isinstance(parsed_error, dict):
+                    error = {
+                        "code": str(parsed_error.get("code", "job_failed")),
+                        "message": str(parsed_error.get("message", "Job failed.")),
+                    }
+                else:
+                    error = {
+                        "code": "job_failed",
+                        "message": str(raw_error),
+                    }
+            except (json.JSONDecodeError, TypeError):
+                # Handle older jobs whose error was stored as plain text.
+                error = {
+                    "code": "job_failed",
+                    "message": str(raw_error),
+                }
+
+        completed_at = row["completed_at"]
+        expires_at = None
+
+        if completed_at:
+            try:
+                finished = datetime.fromisoformat(completed_at)
+                expires_at = (
+                    finished + timedelta(hours=self.RETENTION_HOURS)
+                ).isoformat()
+            except ValueError:
+                expires_at = None
+
         return {
             "job_id": row["job_id"],
             "status": row["status"],
@@ -313,21 +350,17 @@ class JobManager:
             "processed": row["processed"],
             "created_at": row["created_at"],
             "started_at": row["started_at"],
-            "completed_at": row["completed_at"],
+            "finished_at": completed_at,
+            "expires_at": expires_at,
             "model_version": row["model_version"],
-            "error": row["error"],
-            "tickets": (
-                json.loads(row["tickets"])
-                if row["tickets"]
-                else []
-            ),
+            "error": error,
+            "tickets": json.loads(row["tickets"]) if row["tickets"] else [],
             "predictions": (
-                json.loads(row["predictions"])
-                if row["predictions"]
-                else []
+                json.loads(row["predictions"]) if row["predictions"] else []
             ),
             "idempotency_key": row["idempotency_key"],
         }
+
 
 
 # Create the shared manager instance here.

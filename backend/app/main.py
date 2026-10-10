@@ -1,5 +1,14 @@
+import json
+import re
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -16,6 +25,7 @@ from app.schemas.responses import (
     BatchJobStatusResponse,
     BatchResponse,
     HealthResponse,
+    JobError,
     PredictResponse,
 )
 from app.services.inference import InferenceService
@@ -42,7 +52,7 @@ ASYNC_BATCH_MAX_BYTES = 25 * 1024 * 1024
 # ============================================================
 
 def custom_openapi():
-    # Reuse the generated schema after the first request.
+    """Build and cache the OpenAPI document."""
     if app.openapi_schema:
         return app.openapi_schema
 
@@ -53,17 +63,15 @@ def custom_openapi():
         routes=app.routes,
     )
 
-    # Register the API key as an HTTP header in Swagger.
     schema.setdefault("components", {}).setdefault(
         "securitySchemes", {}
     )["APIKeyHeader"] = {
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key",
-        "description": "Enter the API key configured in your backend .env file.",
+        "description": "Enter the API key configured in the backend .env file.",
     }
 
-    # Require authentication only for protected endpoints.
     protected_operations = {
         ("/predict", "post"),
         ("/predict/batch", "post"),
@@ -90,13 +98,13 @@ app.openapi = custom_openapi
 # Services
 # ============================================================
 
-# Load one model instance and share it with the background worker.
+# Share one model instance between synchronous and background predictions.
 inference_service = InferenceService()
 job_worker = JobWorker(inference_service)
 
 
 # ============================================================
-# JSON error response
+# Standard JSON errors
 # ============================================================
 
 def error_response(
@@ -107,25 +115,31 @@ def error_response(
     index: int | None = None,
     field: str | None = None,
     issue: str | None = None,
+    details: list[dict] | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
+    """Return errors in the API contract's standard format."""
     body = {
         "error": {
-            "code": code,
+            "code": code.lower(),
             "message": message,
         }
     }
 
-    details = {}
+    # Convert a single detail into the required details array.
+    if details is None and any(
+        value is not None for value in (index, field, issue)
+    ):
+        detail = {}
 
-    if index is not None:
-        details["index"] = index
+        if index is not None:
+            detail["index"] = index
+        if field is not None:
+            detail["field"] = field
+        if issue is not None:
+            detail["issue"] = issue
 
-    if field is not None:
-        details["field"] = field
-
-    if issue is not None:
-        details["issue"] = issue
+        details = [detail]
 
     if details:
         body["error"]["details"] = details
@@ -138,88 +152,159 @@ def error_response(
 
 
 # ============================================================
-# Protected routes
+# Protected routes and request size
 # ============================================================
 
 def is_protected_path(path: str) -> bool:
     return (
-        path == "/predict"
-        or path == "/predict/batch"
-        or path == "/batch/jobs"
+        path in {"/predict", "/predict/batch", "/batch/jobs"}
         or path.startswith("/batch/jobs/")
     )
 
 
-# ============================================================
-# Request content length
-# ============================================================
-
-def get_content_length(request: Request) -> int:
+def get_content_length(request: Request) -> int | None:
+    """Return Content-Length, or None if missing or invalid."""
     value = request.headers.get("content-length")
 
-    if not value:
-        return 0
+    if value is None:
+        return None
 
     try:
-        return int(value)
+        length = int(value)
+        return length if length >= 0 else None
     except ValueError:
-        return 0
+        return None
 
 
 # ============================================================
-# Authentication, content type, and request size
+# Authentication, content type, and body-size middleware
+# IMPORTANT: Register this middleware BEFORE request_id_middleware.
 # ============================================================
 
 @app.middleware("http")
 async def api_middleware(request: Request, call_next):
     path = request.url.path
 
-    if is_protected_path(path):
-        # Validate the API key before processing protected requests.
-        if not verify_api_key_headers(request.headers):
+    if not is_protected_path(path):
+        return await call_next(request)
+
+    # Authenticate before reading or processing protected request bodies.
+    if not verify_api_key_headers(request.headers):
+        return error_response(
+            401,
+            "unauthorized",
+            "Missing or invalid API key.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Protected requests with bodies must use JSON.
+    if request.method in {"POST", "PUT", "PATCH"}:
+        content_type = request.headers.get("content-type", "")
+
+        if not content_type.lower().startswith("application/json"):
             return error_response(
-                401,
-                "UNAUTHORIZED",
-                "Missing or invalid API key.",
-                headers={"WWW-Authenticate": "Bearer"},
+                415,
+                "unsupported_media_type",
+                "Content-Type must be application/json.",
             )
 
-        # Require JSON for requests that submit a body.
-        if request.method in {"POST", "PUT", "PATCH"}:
-            content_type = request.headers.get("content-type", "")
+    # Apply size limits to synchronous and asynchronous batch submissions.
+    if request.method == "POST" and path in {
+        "/predict/batch",
+        "/batch/jobs",
+    }:
+        body_limit = (
+            SYNC_BATCH_MAX_BYTES
+            if path == "/predict/batch"
+            else ASYNC_BATCH_MAX_BYTES
+        )
+        limit_mb = body_limit // (1024 * 1024)
 
-            if not content_type.lower().startswith("application/json"):
+        # Reject oversized requests before reading the body.
+        content_length = get_content_length(request)
+
+        if content_length is not None and content_length > body_limit:
+            return error_response(
+                413,
+                "payload_too_large",
+                f"Request body exceeds the {limit_mb} MB limit.",
+            )
+
+        # Enforce the limit while reading, even without Content-Length.
+        body_chunks = []
+        body_size = 0
+
+        while True:
+            message = await request.receive()
+
+            if message["type"] == "http.disconnect":
                 return error_response(
-                    415,
-                    "UNSUPPORTED_MEDIA_TYPE",
-                    "Content-Type must be application/json.",
+                    400,
+                    "request_disconnected",
+                    "Client disconnected before sending the complete body.",
                 )
 
-        # Enforce request-size limits using Content-Length.
-        if request.method == "POST":
-            content_length = get_content_length(request)
+            if message["type"] != "http.request":
+                continue
 
-            if (
-                path == "/predict/batch"
-                and content_length > SYNC_BATCH_MAX_BYTES
-            ):
+            chunk = message.get("body", b"")
+            body_size += len(chunk)
+
+            if body_size > body_limit:
                 return error_response(
                     413,
-                    "PAYLOAD_TOO_LARGE",
-                    "Request body exceeds the 5 MB limit.",
+                    "payload_too_large",
+                    f"Request body exceeds the {limit_mb} MB limit.",
                 )
 
-            if (
-                path == "/batch/jobs"
-                and content_length > ASYNC_BATCH_MAX_BYTES
-            ):
-                return error_response(
-                    413,
-                    "PAYLOAD_TOO_LARGE",
-                    "Request body exceeds the 25 MB limit.",
-                )
+            body_chunks.append(chunk)
+
+            if not message.get("more_body", False):
+                break
+
+        # Replay the consumed body so FastAPI can parse the JSON normally.
+        body = b"".join(body_chunks)
+        body_sent = False
+
+        async def replay_body():
+            nonlocal body_sent
+
+            if body_sent:
+                return {
+                    "type": "http.request",
+                    "body": b"",
+                    "more_body": False,
+                }
+
+            body_sent = True
+            return {
+                "type": "http.request",
+                "body": body,
+                "more_body": False,
+            }
+
+        request._receive = replay_body
 
     return await call_next(request)
+
+
+# ============================================================
+# Request ID middleware
+# IMPORTANT: Register this AFTER api_middleware.
+# Starlette makes this the outer middleware, so early errors receive
+# the X-Request-ID header too.
+# ============================================================
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Echo a supplied request ID on successful and error responses."""
+    request_id = request.headers.get("X-Request-ID")
+    response = await call_next(request)
+
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+
+    return response
 
 
 # ============================================================
@@ -227,59 +312,68 @@ async def api_middleware(request: Request, call_next):
 # ============================================================
 
 @app.exception_handler(RequestValidationError)
-async def request_validation_exception_handler(
+async def validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ):
-    errors = exc.errors()
+    details = []
 
-    # Return HTTP 400 for malformed JSON.
-    for error in errors:
-        if error.get("type") == "json_invalid":
-            return error_response(
-                400,
-                "INVALID_JSON",
-                "Request body contains invalid JSON.",
-                issue="Request body contains invalid JSON.",
+    for error in exc.errors():
+        location = list(error.get("loc", ()))
+        message = str(error.get("msg", "Invalid value"))
+
+        # Remove the request-body prefix from the validation location.
+        if location and location[0] == "body":
+            location = location[1:]
+
+        # Recover individual ticket indexes from the duplicate-ID validator.
+        if "Duplicate ticket_id values at:" in message:
+            matches = re.findall(
+                r"tickets\[(\d+)\]\.ticket_id",
+                message,
             )
 
-    # Return HTTP 422 for other validation failures.
-    index = None
-    field = None
-    issue = "Request validation failed."
+            for index_text in matches:
+                details.append({
+                    "index": int(index_text),
+                    "field": "ticket_id",
+                    "issue": "Duplicate ticket_id value.",
+                })
 
-    if errors:
-        first_error = errors[0]
-        location = first_error.get("loc", ())
-        message = first_error.get("msg")
+            continue
 
-        if location:
-            field_parts = []
+        # Build the field path for ordinary validation errors.
+        index = None
 
-            for item in location:
-                if isinstance(item, int):
-                    index = item
-                else:
-                    field_parts.append(str(item))
+        if len(location) >= 2 and location[0] == "tickets":
+            if isinstance(location[1], int):
+                index = location[1]
+                field = ".".join(str(part) for part in location[2:])
+            else:
+                field = ".".join(str(part) for part in location)
+        else:
+            field = ".".join(str(part) for part in location) or "request"
 
-            if field_parts:
-                field = ".".join(field_parts)
+        detail = {
+            "field": field,
+            "issue": message,
+        }
 
-        if message:
-            issue = message
+        if index is not None:
+            detail["index"] = index
+
+        details.append(detail)
 
     return error_response(
-        422,
-        "VALIDATION_ERROR",
-        "Request validation failed.",
-        index=index,
-        field=field,
-        issue=issue,
+        status_code=422,
+        code="validation_error",
+        message="Request failed validation.",
+        details=details,
     )
 
 
 # ============================================================
-# HTTP exception handler
+# HTTP exceptions
 # ============================================================
 
 @app.exception_handler(HTTPException)
@@ -288,20 +382,20 @@ async def http_exception_handler(
     exc: HTTPException,
 ):
     code_map = {
-        400: "BAD_REQUEST",
-        401: "UNAUTHORIZED",
-        404: "NOT_FOUND",
-        409: "CONFLICT",
-        410: "GONE",
-        413: "PAYLOAD_TOO_LARGE",
-        415: "UNSUPPORTED_MEDIA_TYPE",
-        422: "VALIDATION_ERROR",
-        429: "TOO_MANY_REQUESTS",
+        400: "bad_request",
+        401: "unauthorized",
+        404: "not_found",
+        409: "conflict",
+        410: "gone",
+        413: "payload_too_large",
+        415: "unsupported_media_type",
+        422: "validation_error",
+        429: "too_many_requests",
     }
 
     return error_response(
         exc.status_code,
-        code_map.get(exc.status_code, "HTTP_ERROR"),
+        code_map.get(exc.status_code, "http_error"),
         str(exc.detail),
         headers=exc.headers,
     )
@@ -319,7 +413,7 @@ async def starlette_http_exception_handler(
     if exc.status_code == 404:
         return error_response(
             404,
-            "NOT_FOUND",
+            "not_found",
             "Route not found.",
         )
 
@@ -331,14 +425,14 @@ async def starlette_http_exception_handler(
 
         return error_response(
             405,
-            "METHOD_NOT_ALLOWED",
+            "method_not_allowed",
             "HTTP method is not allowed for this route.",
             headers=headers,
         )
 
     return error_response(
         exc.status_code,
-        "HTTP_ERROR",
+        "http_error",
         str(exc.detail),
         headers=exc.headers,
     )
@@ -381,6 +475,36 @@ def predict_batch(request: BatchRequest):
 
 
 # ============================================================
+# Shared job status response helper
+# ============================================================
+
+def build_job_status(job: dict) -> BatchJobStatusResponse:
+    """Map internal job fields to the public status schema."""
+    error = job.get("error")
+
+    if error is not None and not isinstance(error, dict):
+        error = {
+            "code": "job_failed",
+            "message": str(error),
+        }
+
+    return BatchJobStatusResponse(
+        job_id=job["job_id"],
+        status=job["status"],
+        total=job["total"],
+        processed=job["processed"],
+        created_at=job["created_at"],
+        started_at=job.get("started_at"),
+        finished_at=job.get("finished_at"),
+        expires_at=job.get("expires_at"),
+        model_version=(
+            job.get("model_version") or inference_service.model_version
+        ),
+        error=JobError(**error) if error else None,
+    )
+
+
+# ============================================================
 # Create asynchronous batch job
 # ============================================================
 
@@ -397,7 +521,7 @@ def create_batch_job(
         alias="Idempotency-Key",
     ),
 ):
-    # Return the existing job when the idempotency key is reused.
+    # Reuse a job when its idempotency key is repeated.
     if idempotency_key:
         existing_job = job_manager.get_job_by_idempotency_key(
             idempotency_key
@@ -408,35 +532,23 @@ def create_batch_job(
                 f"/batch/jobs/{existing_job['job_id']}"
             )
             response.headers["Retry-After"] = "2"
+            return build_job_status(existing_job)
 
-            return BatchJobStatusResponse(
-                job_id=existing_job["job_id"],
-                status=existing_job["status"],
-                total=existing_job["total"],
-                processed=existing_job["processed"],
-                created_at=existing_job["created_at"],
-                started_at=existing_job["started_at"],
-                completed_at=existing_job["completed_at"],
-                model_version=existing_job["model_version"],
-                error=existing_job["error"],
-            )
-
-    # Enforce the active-job capacity limit.
+    # Reject new jobs when the active-job capacity is full.
     if job_manager.count_active_jobs() >= job_manager.MAX_ACTIVE_JOBS:
         return error_response(
             429,
-            "TOO_MANY_REQUESTS",
+            "too_many_requests",
             "Batch job capacity is currently full.",
             headers={"Retry-After": "5"},
         )
 
-    # Create a new queued job.
     job = job_manager.create_job(
         tickets=request.tickets,
         idempotency_key=idempotency_key,
     )
 
-    # Store the model version before processing starts.
+    # Record the model version before background processing starts.
     job_manager.update_job(
         job["job_id"],
         model_version=inference_service.model_version,
@@ -447,20 +559,9 @@ def create_batch_job(
     response.headers["Location"] = f"/batch/jobs/{job['job_id']}"
     response.headers["Retry-After"] = "2"
 
-    # Start background processing.
     job_worker.submit(job["job_id"])
 
-    return BatchJobStatusResponse(
-        job_id=job["job_id"],
-        status=job["status"],
-        total=job["total"],
-        processed=job["processed"],
-        created_at=job["created_at"],
-        started_at=job["started_at"],
-        completed_at=job["completed_at"],
-        model_version=job["model_version"],
-        error=job["error"],
-    )
+    return build_job_status(job)
 
 
 # ============================================================
@@ -489,17 +590,7 @@ def get_batch_job_status(job_id: str, response: Response):
     if job["status"] in {"queued", "running"}:
         response.headers["Retry-After"] = "2"
 
-    return BatchJobStatusResponse(
-        job_id=job["job_id"],
-        status=job["status"],
-        total=job["total"],
-        processed=job["processed"],
-        created_at=job["created_at"],
-        started_at=job["started_at"],
-        completed_at=job["completed_at"],
-        model_version=job["model_version"],
-        error=job["error"],
-    )
+    return build_job_status(job)
 
 
 # ============================================================
@@ -512,21 +603,9 @@ def get_batch_job_status(job_id: str, response: Response):
 )
 def get_batch_job_results(
     job_id: str,
-    offset: int = 0,
-    limit: int = 100,
+    offset: int = Query(default=0, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=5000),
 ):
-    if offset < 0:
-        raise HTTPException(
-            status_code=422,
-            detail="offset must be >= 0.",
-        )
-
-    if limit < 1 or limit > 100:
-        raise HTTPException(
-            status_code=422,
-            detail="limit must be between 1 and 100.",
-        )
-
     job = job_manager.get_job(job_id)
 
     if job is None:
@@ -541,7 +620,6 @@ def get_batch_job_results(
             detail="Batch job not found.",
         )
 
-    # Return HTTP 409 until the job completes successfully.
     if job["status"] != "succeeded":
         raise HTTPException(
             status_code=409,
@@ -549,21 +627,28 @@ def get_batch_job_results(
         )
 
     predictions = job.get("predictions") or []
-    page = predictions[offset:offset + limit]
+    total = len(predictions)
+
+    # Without a limit, return all results.
+    effective_limit = total if limit is None else limit
+    page = predictions[offset:offset + effective_limit]
 
     next_offset = (
-        offset + limit
-        if offset + limit < len(predictions)
+        offset + len(page)
+        if offset + len(page) < total
         else None
     )
 
     return BatchJobResultsResponse(
         job_id=job["job_id"],
         status="succeeded",
-        total=len(predictions),
+        total=total,
         offset=offset,
-        limit=limit,
+        limit=effective_limit,
         next_offset=next_offset,
+        model_version=(
+            job.get("model_version") or inference_service.model_version
+        ),
         predictions=page,
     )
 
@@ -593,10 +678,10 @@ def delete_batch_job(job_id: str):
             job_id,
             status="cancelled",
             completed_at=job_manager._now(),
-            error="Job cancelled by client.",
+            error=None,
         )
         return Response(status_code=204)
 
-    # Delete a completed or failed job.
+    # Completed, failed, or already-cancelled jobs can be deleted.
     job_manager.delete_job(job_id)
     return Response(status_code=204)

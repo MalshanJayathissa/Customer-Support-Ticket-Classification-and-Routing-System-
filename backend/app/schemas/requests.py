@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 Channel = Literal[
@@ -13,95 +13,65 @@ Channel = Literal[
 class PredictRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    ticket_id: str | None = Field(
-        default=None,
-        max_length=64,
-    )
+    # Optional for /predict. Explicit null is rejected because the type is str.
+    ticket_id: str = Field(default=None, max_length=64)
 
     channel: Channel
-
-    subject: str = Field(
-        default="",
-        max_length=500,
-    )
-
-    text: str = Field(
-        min_length=1,
-        max_length=10_000,
-    )
+    subject: str = Field(default="", max_length=500)
+    text: str = Field(min_length=1, max_length=10_000)
 
     @field_validator("text")
     @classmethod
-    def text_must_contain_non_whitespace(
-        cls,
-        value: str,
-    ) -> str:
+    def text_must_contain_non_whitespace(cls, value: str) -> str:
         if not value.strip():
             raise ValueError(
-                "Field 'text' must contain at least one "
-                "non-whitespace character."
+                "Text must contain at least one non-whitespace character."
             )
-
         return value
 
 
+class BatchTicketRequest(PredictRequest):
+    # Required for every ticket in either batch endpoint.
+    ticket_id: str = Field(min_length=1, max_length=64)
+
+
 class BatchRequest(BaseModel):
-    tickets: list[PredictRequest] = Field(
-        min_length=1,
-        max_length=100,
-    )
+    tickets: list[BatchTicketRequest] = Field(min_length=1, max_length=100)
 
-    @field_validator("tickets")
-    @classmethod
-    def validate_ticket_ids(
-        cls,
-        tickets: list[PredictRequest],
-    ):
+    @model_validator(mode="after")
+    def ticket_ids_must_be_unique(self):
         seen: set[str] = set()
+        duplicates: list[str] = []
 
-        for index, ticket in enumerate(tickets):
-            if not ticket.ticket_id:
-                raise ValueError(
-                    f"tickets[{index}].ticket_id is required."
-                )
-
+        for index, ticket in enumerate(self.tickets):
             if ticket.ticket_id in seen:
-                raise ValueError(
-                    f"tickets[{index}].ticket_id is duplicated: "
-                    f"{ticket.ticket_id}"
-                )
-
+                duplicates.append(f"tickets[{index}].ticket_id")
             seen.add(ticket.ticket_id)
 
-        return tickets
+        if duplicates:
+            raise ValueError(
+                "Duplicate ticket_id values at: " + ", ".join(duplicates)
+            )
+
+        return self
 
 
 class BatchJobRequest(BaseModel):
-    tickets: list[PredictRequest] = Field(
-        min_length=1,
-        max_length=5000,
-    )
+    tickets: list[BatchTicketRequest] = Field(min_length=1, max_length=5000)
 
-    @field_validator("tickets")
-    @classmethod
-    def validate_ticket_ids(
-        cls,
-        tickets: list[PredictRequest],
-    ):
+    @model_validator(mode="after")
+    def ticket_ids_must_be_unique(self):
         seen: set[str] = set()
+        duplicates: list[str] = []
 
-        for index, ticket in enumerate(tickets):
-            if not ticket.ticket_id:
-                raise ValueError(
-                    f"tickets[{index}].ticket_id is required."
-                )
-
+        for index, ticket in enumerate(self.tickets):
             if ticket.ticket_id in seen:
-                raise ValueError(
-                    f"tickets[{index}].ticket_id is duplicated: "
-                    f"{ticket.ticket_id}"
-                )
-
+                duplicates.append(f"tickets[{index}].ticket_id")
             seen.add(ticket.ticket_id)
 
-        return tickets
+        if duplicates:
+            raise ValueError(
+                "Duplicate ticket_id values at: " + ", ".join(duplicates)
+            )
+
+        return self
