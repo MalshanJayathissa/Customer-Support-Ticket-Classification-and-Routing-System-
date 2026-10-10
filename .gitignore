@@ -220,7 +220,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 
-
 .env
 .venv/
 __pycache__/
@@ -273,3 +272,17 @@ backend/model/
 # Environment
 .env
 .venv/
+
+# Trained model checkpoints and training state
+models/**/checkpoint-*/
+**/optimizer.pt
+**/scheduler.pt
+**/rng_state.pth
+**/scaler.pt
+**/training_args.bin
+**/trainer_state.json
+
+# Generated model package archive
+model_handoff.zip
+models/
+model_handoff/
