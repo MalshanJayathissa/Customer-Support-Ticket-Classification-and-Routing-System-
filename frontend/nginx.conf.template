@@ -1,0 +1,31 @@
+
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Allow batch uploads up to the backend's payload limit.
+    client_max_body_size 26m;
+
+    # Forward API requests to FastAPI.
+    location /api/ {
+        proxy_pass http://backend:8000/;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Request-ID $http_x_request_id;
+
+        # Inject the API key on the server side.
+        proxy_set_header X-API-Key "${API_KEY}";
+
+        proxy_connect_timeout 30s;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
+    }
+
+    # Support React Router URLs such as /predict and /dashboard.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

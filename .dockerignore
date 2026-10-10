@@ -1,0 +1,26 @@
+﻿# Keep Git history out of Docker builds
+.git
+.gitignore
+
+# Exclude Python environments and cache files
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+
+# Exclude frontend dependencies and generated files
+**/node_modules/
+**/dist/
+
+# Never copy environment files or secrets into images
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Exclude local editor and operating-system files
+.vscode/
+.idea/
+.DS_Store

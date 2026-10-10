@@ -1,0 +1,13 @@
+﻿# Exclude local dependencies and generated build files
+node_modules/
+dist/
+
+# Exclude local environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Exclude Git and editor files
+.git/
+.vscode/
+.idea/
