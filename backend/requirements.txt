@@ -7,3 +7,4 @@ transformers
 joblib
 scikit-learn
 numpy<2.5
+scikit-learn==1.7.2

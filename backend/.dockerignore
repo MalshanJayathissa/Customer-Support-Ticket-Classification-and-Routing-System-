@@ -1,27 +1,13 @@
-# Python environments
+
 .venv/
 venv/
 __pycache__/
 *.pyc
-*.pyo
-
-# Secrets
 .env
 .env.*
-
-# Local database
 jobs.db
 jobs.db-shm
 jobs.db-wal
-
-# Development files
 .git/
-.gitignore
 .pytest_cache/
 *.log
-test_*.json
-duplicate_batch.json
-
-# OS files
-.DS_Store
-Thumbs.db
