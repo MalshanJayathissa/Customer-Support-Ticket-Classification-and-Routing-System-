@@ -255,4 +255,11 @@ model_handoff.zip
 # Scikit-learn serialized models
 *.joblib
 
->>>>>>> 410f399055726fe8e7471924defabab1073022da
+# >>>>>>> 410f399055726fe8e7471924defabab1073022da
+.env
+
+model/
+models/
+# Model artifacts
+backend/models/
+backend/model/
