@@ -219,6 +219,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+
+.env
+.venv/
+__pycache__/
+*.pyc
+
 # ML / experiment artifacts
 mlruns/
 *.pkl
@@ -248,3 +254,35 @@ model_handoff.zip
 # Scikit-learn serialized models
 *.joblib
 
+
+.env
+
+model/
+models/
+# Model artifacts
+backend/models/
+backend/model/
+
+# Model artifacts
+/model/
+/models/
+/backend/model/
+/backend/models/
+
+# Environment
+.env
+.venv/
+
+# Trained model checkpoints and training state
+models/**/checkpoint-*/
+**/optimizer.pt
+**/scheduler.pt
+**/rng_state.pth
+**/scaler.pt
+**/training_args.bin
+**/trainer_state.json
+
+# Generated model package archive
+model_handoff.zip
+models/
+model_handoff/
