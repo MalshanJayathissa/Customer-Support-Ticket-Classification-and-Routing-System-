@@ -219,13 +219,13 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-<<<<<<< HEAD
+
 
 .env
 .venv/
 __pycache__/
 *.pyc
-=======
+
 # ML / experiment artifacts
 mlruns/
 *.pkl
@@ -255,7 +255,7 @@ model_handoff.zip
 # Scikit-learn serialized models
 *.joblib
 
-# >>>>>>> 410f399055726fe8e7471924defabab1073022da
+
 .env
 
 model/
@@ -263,3 +263,13 @@ models/
 # Model artifacts
 backend/models/
 backend/model/
+
+# Model artifacts
+/model/
+/models/
+/backend/model/
+/backend/models/
+
+# Environment
+.env
+.venv/
