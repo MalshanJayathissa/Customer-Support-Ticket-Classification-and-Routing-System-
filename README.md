@@ -105,6 +105,8 @@ These tests establish local functionality; they do not replace complete validati
 Do not commit `.env` files, API keys, local SQLite data, or sensitive customer-support data.
 
 The API key must be supplied through an environment variable or deployment secret.
+Api key is secretly kept inside a env file and use it through key pass.
+use API key and command to run the docker
 
 ## License and Acknowledgments
 
