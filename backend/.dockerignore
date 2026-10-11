@@ -11,3 +11,4 @@ jobs.db-wal
 .git/
 .pytest_cache/
 *.log
+test_*.json
